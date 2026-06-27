@@ -76,28 +76,11 @@ graph = builder.compile(checkpointer=memory)
 
 config = {"configurable": {"thread_id": "user-1"}}
 
-def show_history():
-    all_states = list(graph.get_state_history(config))
-    print(f"\n--- History: {len(all_states)} checkpoints ---")
-    for i, state in enumerate(all_states):
-        msgs = len(state.values.get("messages", []))
-        summary = "yes" if state.values.get("summary") else "no"
-        print(f"[{i}] messages: {msgs} | summary: {summary} | next: {state.next}")
-    print("---\n")
-
-print("FAQ Chatbot (type 'quit' to exit, 'history' to browse checkpoints)\n")
-while True:
-    q = input("You: ")
-    if q == "quit":
-        break
-    if q == "history":
-        show_history()
-        continue
-
+def stream_response(run_config, input_data=None):
     first_token = True
     for token, metadata in graph.stream(
-        {"messages": [HumanMessage(q)], "question": q},
-        config,
+        input_data,
+        run_config,
         stream_mode="messages"
     ):
         if metadata["langgraph_node"] == "chat" and token.content:
@@ -105,17 +88,68 @@ while True:
                 print("Bot: ", end="", flush=True)
                 first_token = False
             print(token.content, end="", flush=True)
+    print("\n")
+
+def show_history():
+    all_states = list(graph.get_state_history(config))
+    print(f"\n--- History: {len(all_states)} checkpoints ---")
+    for i, state in enumerate(all_states):
+        msgs = state.values.get("messages", [])
+        summary = "yes" if state.values.get("summary") else "no"
+        last = f'"{msgs[-1].content[:40]}"' if msgs else "empty"
+        print(f"[{i}] msgs: {len(msgs)} | summary: {summary} | next: {state.next} | last: {last}")
+    print("---\n")
+    return all_states
+
+SMALL_TALK = {"great", "thanks", "thank you", "ok", "okay", "sure", "got it",
+              "perfect", "awesome", "cool", "nice", "good", "cheers", "thx", "ty"}
+
+print("FAQ Chatbot (type 'quit' / 'history' / 'replay <n>' / 'fork <n>')\n")
+while True:
+    q = input("You: ")
+    if q == "quit":
+        break
+
+    if q == "history":
+        show_history()
+        continue
+
+    if q.startswith("replay "):
+        index = int(q.split()[1])
+        all_states = show_history()
+        to_replay = all_states[index]
+        if not to_replay.values.get("messages"):
+            print("Cannot replay from an empty checkpoint. Pick one with messages > 0.\n")
+            continue
+        print(f"Replaying from checkpoint [{index}]...\n")
+        stream_response(to_replay.config)
+        continue
+
+    if q.startswith("fork "):
+        index = int(q.split()[1])
+        all_states = list(graph.get_state_history(config))
+        to_fork = all_states[index]
+        last_human = next(m for m in reversed(to_fork.values["messages"]) if isinstance(m, HumanMessage))
+        new_q = input(f"Original: '{last_human.content}'\nNew question: ")
+        fork_config = graph.update_state(
+            to_fork.config,
+            {"messages": [HumanMessage(content=new_q, id=last_human.id)]}
+        )
+        print(f"Forking from checkpoint [{index}] with new question...\n")
+        for event in graph.stream(None, fork_config, stream_mode="values"):
+            msgs = event.get("messages", [])
+            if msgs and hasattr(msgs[-1], "content") and msgs[-1].type == "ai":
+                print(f"Bot: {msgs[-1].content}\n")
+        continue
+
+    if q.lower().strip() in SMALL_TALK:
+        print("Bot: Glad I could help! Anything else you'd like to know?\n")
+        continue
+
+    stream_response(config, {"messages": [HumanMessage(q)], "question": q})
 
     state = graph.get_state(config)
     if state.tasks and state.tasks[0].interrupts:
-        correction = input("\nQuestion outside FAQ scope. Rephrase your question: ")
+        correction = input("Question outside FAQ scope. Rephrase your question: ")
         graph.update_state(config, {"messages": [HumanMessage(correction)]})
-        first_token = True
-        for token, metadata in graph.stream(None, config, stream_mode="messages"):
-            if metadata["langgraph_node"] == "chat" and token.content:
-                if first_token:
-                    print("Bot: ", end="", flush=True)
-                    first_token = False
-                print(token.content, end="", flush=True)
-
-    print("\n")
+        stream_response(config)
