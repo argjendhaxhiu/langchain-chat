@@ -11,7 +11,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 class InputState(TypedDict):
     question: str
     messages: list
-    
+
 class OutputState(TypedDict):
   answer: str
 
@@ -70,5 +70,10 @@ while True:
   q = input("You: ")
   if q == "quit":
     break
-  result = graph.invoke({"question": q, "messages": [HumanMessage(q)]}, config)
-  print(f"Bot: {result['answer']}\n")
+  # result = graph.invoke({"question": q, "messages": [HumanMessage(q)]}, config)
+  # print(f"Bot: {result['answer']}\n")
+  print("Bot: ", end="", flush=True)
+  for token, metadata in graph.stream({"messages": [HumanMessage(q)], "question": q}, config, stream_mode="messages"):
+    if metadata["langgraph_node"] == "chat":
+      print(token.content, end="", flush=True)
+  print("\n")
