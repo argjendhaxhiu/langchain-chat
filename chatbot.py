@@ -7,6 +7,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage, RemoveMessage
 from langgraph.graph import MessagesState, StateGraph, START, END
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.types import interrupt
 
 class InputState(TypedDict):
     question: str
@@ -32,12 +33,9 @@ def check_question(state: State):
     keywords = ["return", "ship", "pay", "account", "password", "delivery", "visa", "mastercard"]
     last_msg = state["messages"][-1].content.lower()
     is_relevant = any(k in last_msg for k in keywords)
-    return {"answer": "" if is_relevant else "OUT_OF_SCOPE"}
-
-def route_question(state: State) -> Literal["chat", "blocked"]:
-    if state.get("answer") == "OUT_OF_SCOPE":
-        return "blocked"
-    return "chat"
+    if not is_relevant:
+        interrupt("Question is outside FAQ scope")
+    return {"answer": ""}
 
 def call_model(state: State):
     summary = state.get("summary", "")
@@ -66,20 +64,15 @@ memory = SqliteSaver(conn)
 
 builder = StateGraph(State, input_schema=InputState, output_schema=OutputState)
 builder.add_node("check_question", check_question)
-builder.add_node("blocked", lambda state: state)
 builder.add_node("chat", call_model)
 builder.add_node("summarize", summarize)
 
 builder.add_edge(START, "check_question")
-builder.add_conditional_edges("check_question", route_question)
-builder.add_edge("blocked", END)
+builder.add_edge("check_question", "chat")
 builder.add_conditional_edges("chat", should_continue)
 builder.add_edge("summarize", END)
 
-graph = builder.compile(
-    checkpointer=memory,
-    interrupt_before=["blocked"]
-)
+graph = builder.compile(checkpointer=memory)
 
 config = {"configurable": {"thread_id": "user-1"}}
 
@@ -102,9 +95,9 @@ while True:
             print(token.content, end="", flush=True)
 
     state = graph.get_state(config)
-    if state.next == ("blocked",):
+    if state.tasks and state.tasks[0].interrupts:
         correction = input("\nQuestion outside FAQ scope. Rephrase your question: ")
-        graph.update_state(config, {"messages": [HumanMessage(correction)], "answer": ""})
+        graph.update_state(config, {"messages": [HumanMessage(correction)]})
         first_token = True
         for token, metadata in graph.stream(None, config, stream_mode="messages"):
             if metadata["langgraph_node"] == "chat" and token.content:
