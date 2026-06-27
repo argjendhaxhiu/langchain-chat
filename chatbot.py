@@ -103,14 +103,14 @@ while True:
 
     state = graph.get_state(config)
     if state.next == ("blocked",):
-        approval = input("\nQuestion outside FAQ scope. Answer anyway? (yes/no): ")
-        if approval.lower() == "yes":
-            graph.update_state(config, {"answer": ""})
-            for token, metadata in graph.stream(None, config, stream_mode="messages"):
-                if metadata["langgraph_node"] == "chat":
+        correction = input("\nQuestion outside FAQ scope. Rephrase your question: ")
+        graph.update_state(config, {"messages": [HumanMessage(correction)], "answer": ""})
+        first_token = True
+        for token, metadata in graph.stream(None, config, stream_mode="messages"):
+            if metadata["langgraph_node"] == "chat" and token.content:
+                if first_token:
                     print("Bot: ", end="", flush=True)
-                    print(token.content, end="", flush=True)
-        else:
-            print("Bot: I can only answer questions about returns, shipping, payments, and accounts.")
+                    first_token = False
+                print(token.content, end="", flush=True)
 
     print("\n")
