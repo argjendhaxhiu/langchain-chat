@@ -76,11 +76,23 @@ graph = builder.compile(checkpointer=memory)
 
 config = {"configurable": {"thread_id": "user-1"}}
 
-print("FAQ Chatbot (type 'quit' to exit)\n")
+def show_history():
+    all_states = list(graph.get_state_history(config))
+    print(f"\n--- History: {len(all_states)} checkpoints ---")
+    for i, state in enumerate(all_states):
+        msgs = len(state.values.get("messages", []))
+        summary = "yes" if state.values.get("summary") else "no"
+        print(f"[{i}] messages: {msgs} | summary: {summary} | next: {state.next}")
+    print("---\n")
+
+print("FAQ Chatbot (type 'quit' to exit, 'history' to browse checkpoints)\n")
 while True:
     q = input("You: ")
     if q == "quit":
         break
+    if q == "history":
+        show_history()
+        continue
 
     first_token = True
     for token, metadata in graph.stream(
